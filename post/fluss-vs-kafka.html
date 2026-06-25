@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Is Apache Fluss a Kafka Killer? I Ran the Numbers with Flink 2.2</title>
+<style>
+  :root{
+    --fluss:#0a7d4d; --kafka:#8a2be2; --ink:#1a1a1a; --muted:#5b6168;
+    --line:#e6e8eb; --bg:#ffffff; --code-bg:#f6f8fa; --accent-bg:#f3faf6;
+    --warn-bg:#fff7ed; --warn-bd:#f59e0b;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:18px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  .wrap{max-width:760px; margin:0 auto; padding:48px 22px 96px}
+  h1{font-size:2.35rem; line-height:1.18; letter-spacing:-.02em; margin:.2em 0 .35em}
+  h2{font-size:1.7rem; line-height:1.25; letter-spacing:-.015em; margin:2.4em 0 .5em; padding-top:.4em}
+  h3{font-size:1.22rem; margin:1.9em 0 .4em; color:#222}
+  p{margin:1.05em 0}
+  a{color:var(--fluss); text-decoration:none; border-bottom:1px solid rgba(10,125,77,.3)}
+  .dek{font-size:1.2rem; color:var(--muted); font-style:italic; margin:.2em 0 1.4em}
+  .byline{color:var(--muted); font-size:.92rem; border-bottom:1px solid var(--line); padding-bottom:1.4em; margin-bottom:1.6em}
+  hr{border:0; border-top:1px solid var(--line); margin:2.6em 0}
+  code{background:var(--code-bg); padding:.12em .4em; border-radius:5px; font-size:.86em;
+    font-family:"SF Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  pre{background:var(--code-bg); border:1px solid var(--line); border-radius:10px;
+    padding:16px 18px; overflow:auto; margin:1.3em 0}
+  pre code{background:none; padding:0; font-size:.82em; line-height:1.55; color:#0b3d2e}
+  ul,ol{margin:1.05em 0; padding-left:1.4em}
+  li{margin:.4em 0}
+  strong{font-weight:700}
+  figure{margin:1.8em 0; text-align:center}
+  figure img{max-width:100%; height:auto; border:1px solid var(--line); border-radius:10px; box-shadow:0 1px 8px rgba(0,0,0,.05)}
+  figcaption{color:var(--muted); font-size:.86rem; margin-top:.7em}
+  table{border-collapse:collapse; width:100%; margin:1.6em 0; font-size:.92rem}
+  th,td{border:1px solid var(--line); padding:9px 12px; text-align:left; vertical-align:top}
+  thead th{background:#fafbfc; font-weight:700}
+  tbody tr:nth-child(even){background:#fcfcfd}
+  td.num{text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap}
+  .fluss{color:var(--fluss); font-weight:700}
+  .kafka{color:var(--kafka); font-weight:700}
+  blockquote{margin:1.4em 0; padding:.4em 1.1em; border-left:4px solid var(--fluss);
+    background:var(--accent-bg); border-radius:0 8px 8px 0; color:#234}
+  blockquote p{margin:.6em 0}
+  .callout{border:1px solid var(--warn-bd); background:var(--warn-bg); border-radius:10px;
+    padding:14px 18px; margin:1.5em 0; font-size:.95rem}
+  .callout b{color:#b45309}
+  .tldr{background:var(--accent-bg); border:1px solid #cdeadd; border-radius:12px; padding:6px 22px; margin:1.6em 0}
+  .meta-versions{display:flex; gap:8px; flex-wrap:wrap; margin:1em 0}
+  .chip{background:var(--code-bg); border:1px solid var(--line); border-radius:999px;
+    padding:4px 13px; font-size:.82rem; font-weight:600}
+  .footnote{color:var(--muted); font-size:.9rem; font-style:italic}
+
+  hr.major{border-top:2px solid var(--fluss); opacity:.5; margin:3.2em 0 0}
+  .part{margin:1.6em 0 1.8em}
+  .part .kicker{display:inline-block; font-size:.72rem; font-weight:700; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--fluss); border:1px solid var(--fluss);
+    border-radius:999px; padding:3px 12px; margin:0}
+  .part h2{font-size:2.05rem; margin:.45em 0 .1em; padding-top:0}
+  .part .part-sub{color:var(--muted); font-style:italic; margin:.15em 0 0; font-size:1.05rem}
+  h4{font-size:1.08rem; margin:1.6em 0 .35em; color:#2a2a2a}
+</style>
+</head>
+<body>
+<article class="wrap">
+
+  <h1>Is Apache Fluss a Kafka Killer? I Ran the Numbers with Flink&nbsp;2.2</h1>
+  <p class="dek">One question runs through this whole post: <strong>where does your Flink state live?</strong> Answer that, and you understand exactly when Fluss beats Kafka — and when it doesn't.</p>
+  <div class="byline">
+    <div class="meta-versions">
+      <span class="chip">Fluss 0.9.1-incubating</span>
+      <span class="chip">Flink 2.2.1</span>
+      <span class="chip">Kafka 3.9 (KRaft)</span>
+      <span class="chip">measured live</span>
+    </div>
+  </div>
+
+  <div class="tldr">
+    <h2 style="margin-top:.6em">TL;DR</h2>
+    <p>Fluss is <strong>not</strong> a Kafka killer. It's a <strong>streaming storage</strong> layer that is genuinely better than Kafka at one job — being the <strong>state and lookup tier for Flink</strong> — and clearly behind Kafka at being a general-purpose, polyglot event bus.</p>
+    <p>The thesis in one line: <strong>a Flink job holds its join and enrichment state in RocksDB; Fluss lets you push that state out of Flink and into an indexed table.</strong> I measured it on the same 1.5M-key join — Flink's checkpoint went from <strong>~87 MB to ~48 KB</strong>, and the savepoint from <strong>242 MB to 28 KB</strong>. Two Fluss features do this — <strong>delta join</strong> and <strong>lookup join</strong> — and they get equal billing here because they're the same idea with different tradeoffs.</p>
+    <p>But delta join is INNER-only, the duplicate rules are Flink's not Fluss's, Kafka still wins on raw ingest and replay, the Kafka-protocol bridge isn't usable yet, and Fluss is Apache <em>incubating</em> (I hit real bugs). Honest verdict: <strong>complement, not kill</strong> — adopt Fluss where Flink touches state; keep Kafka as the bus.</p>
+  </div>
+
+  <figure>
+    <img src="img/05_scorecard.png" alt="Fluss vs Kafka measured scorecard">
+    <figcaption>The whole study on one card — each row tied to a measured result.</figcaption>
+  </figure>
+
+  <hr class="major">
+  <div class="part">
+    <p class="kicker">Setup</p>
+    <h2>The thesis</h2>
+    <p class="part-sub">Why Fluss exists, in one question</p>
+  </div>
+
+  <h3>1. What Fluss actually is</h3>
+  <p>Kafka is a distributed <strong>log</strong>: append opaque records, read them back in order. The broker doesn't know what's inside a record.</p>
+  <p>Fluss is <strong>streaming storage</strong> built for analytics and for Flink:</p>
+  <ul>
+    <li><strong>Two table types</strong> — <em>Log tables</em> (append-only, like a Kafka topic) and <em>PrimaryKey tables</em> (updatable, with the PK as an index).</li>
+    <li><strong>Columnar on the wire</strong> (Arrow) — <strong>projection pushdown</strong>: ask for 2 of 30 columns and only those 2 leave the server.</li>
+    <li><strong>A lookupable index</strong> — because PK tables are indexed, Flink can do point/prefix lookups against them. <em>This is the property the whole post hinges on.</em></li>
+    <li><strong>Lakehouse tiering</strong> — cold data tiers to Paimon/Iceberg/Lance, still queryable as one table.</li>
+  </ul>
+  <p>Mental model: <strong>Kafka stores events; Fluss stores tables that happen to stream.</strong> And a table you can look up by key is a table that can hold someone else's state.</p>
+
+  <hr>
+
+  <h3>2. The one idea: where does your join state live?</h3>
+  <p>Every stateful Flink join keeps its working set somewhere. A normal <strong>stream-stream join</strong> keeps <em>both</em> input sides materialized in Flink keyed state (RocksDB), so a late row on either side can still find its match. That state:</p>
+  <ul>
+    <li>grows with key cardinality, effectively unbounded;</li>
+    <li>is copied into <strong>every checkpoint</strong> (slow checkpoints);</li>
+    <li>must be <strong>reloaded on recovery</strong> (slow failover);</li>
+    <li>dominates TaskManager memory.</li>
+  </ul>
+  <p>Anyone who's run a big Flink join in production knows the symptoms: multi-GB checkpoints, minute-long checkpoint durations, painful restarts.</p>
+  <p>Fluss offers two ways to <strong>move that state out of Flink</strong> — because the other side already lives in an indexed Fluss table, Flink can <em>look it up</em> instead of <em>storing it</em>:</p>
+  <ul>
+    <li><strong>Delta join</strong> — a dual-stream INNER join where each side looks the other up in Fluss.</li>
+    <li><strong>Lookup join</strong> — stream enrichment that looks a dimension up in Fluss at processing time.</li>
+  </ul>
+  <p>The next two sections are these two pillars, equally weighted. Then §5 shows the shared payoff — checkpoints, savepoints, recovery — that both unlock.</p>
+
+  <hr class="major">
+  <div class="part">
+    <p class="kicker">Core result</p>
+    <h2>Moving join state out of Flink</h2>
+    <p class="part-sub">The two pillars — delta join &amp; lookup join — and the payoff they share</p>
+  </div>
+
+  <h3>3. Pillar 1 — Delta join (the dual-stream INNER join)</h3>
+  <p>Delta join (Flink 2.1+, designed with Fluss) replaces "look up the other side <strong>from Flink state</strong>" with "look up the other side <strong>from the Fluss PK-table index</strong>." Both inputs are Fluss PK tables; each incoming row does a prefix-key lookup against the other.</p>
+  <p>I swept join-key cardinality and measured Flink's checkpoint state:</p>
+  <figure>
+    <img src="img/01_delta_join_cardinality_sweep.png" alt="Delta join keeps checkpoints flat as join state grows">
+    <figcaption>Same INNER join, same data; only the optimizer strategy differs. Log-log axes.</figcaption>
+  </figure>
+  <table>
+    <thead><tr><th>Distinct keys</th><th>Delta join</th><th>Stream-stream join</th><th>Ratio</th></tr></thead>
+    <tbody>
+      <tr><td class="num">1,000</td><td class="num">31 KB</td><td class="num">97 KB</td><td class="num"><span class="fluss">3×</span></td></tr>
+      <tr><td class="num">10,000</td><td class="num">39 KB</td><td class="num">595 KB</td><td class="num"><span class="fluss">15×</span></td></tr>
+      <tr><td class="num">50,000</td><td class="num">42 KB</td><td class="num">2.97 MB</td><td class="num"><span class="fluss">71×</span></td></tr>
+      <tr><td class="num">200,000</td><td class="num">53 KB</td><td class="num">13.8 MB</td><td class="num"><span class="fluss">261×</span></td></tr>
+    </tbody>
+  </table>
+  <p>Delta join stays <strong>flat</strong> (state is in Fluss); the stream-stream join grows <strong>linearly</strong> (state is in Flink) and the gap compounds to <strong>261×</strong>.</p>
+
+  <h4>The catch: it's INNER-only, and silently fussy</h4>
+  <p>This is where demos mislead. Delta join engages only when <strong>all</strong> of these hold — miss one and the planner <strong>silently</strong> falls back to a stateful join (no warning, big checkpoints again). I pinned these down by forcing <code>table.optimizer.delta-join.strategy=FORCE</code> so the planner throws instead of degrading:</p>
+  <ol>
+    <li>Both inputs are <strong>Fluss PrimaryKey tables</strong>.</li>
+    <li>The join key is the <strong><code>bucket.key</code> and a prefix of the PK</strong> (e.g. <code>orders</code> PK must be <code>(user_id, order_id)</code>, not <code>(order_id, user_id)</code>).</li>
+    <li>Inputs are <strong>insert-only</strong> — <code>'table.merge-engine' = 'first_row'</code> (or suppress deletes on a CDC source) so the changelog is <code>[I]</code>.</li>
+    <li>The join is <strong>INNER</strong>. <em>LEFT/RIGHT/FULL OUTER are not supported — they fall back to a stateful stream-stream join.</em></li>
+    <li>The query is a full <code>INSERT INTO &lt;upsert-sink&gt; SELECT … JOIN …</code> (an <code>EXPLAIN SELECT</code> with no sink never shows a <code>DeltaJoin</code>).</li>
+    <li>Fluss has <strong>one index per table</strong> (the prefix key) today — one join key to optimize on.</li>
+  </ol>
+  <p>So if you need an outer join, delta join gives you nothing. That's the single biggest limitation — and why the next pillar matters just as much.</p>
+
+  <hr>
+
+  <h3>4. Pillar 2 — Lookup join (stream enrichment)</h3>
+  <p>The more common shape isn't joining two streams — it's <strong>enriching a stream against a dimension</strong> (orders → user profile, clicks → product catalog). With Kafka you'd bolt on Redis/HBase, or hold the dimension in Flink state and replay a compacted topic to rebuild it on every restart. With Fluss, the dimension is an indexed PK table you look up directly:</p>
+  <pre><code>SELECT o.order_id, o.user_id, u.name
+FROM orders_kafka AS o
+LEFT JOIN users_fluss FOR SYSTEM_TIME AS OF o.proc AS u
+  ON o.user_id = u.user_id;</code></pre>
+  <p>Things I verified live that matter here:</p>
+  <ul>
+    <li><strong>The driving stream can be Kafka.</strong> I ran a Kafka <code>orders</code> topic enriched against a Fluss <code>users</code> dimension — the realistic "Kafka as bus, Fluss as state tier" pattern. No external KV, no dimension held in Flink state.</li>
+    <li><strong>It works with INNER <em>and</em> LEFT.</strong> With a deliberate orphan order (no matching user): INNER <strong>dropped</strong> it (1000→1000), LEFT <strong>kept</strong> it as <code>name=null</code> (1000→1001). Lookup is <em>not</em> coupled to delta join's INNER-only restriction.</li>
+    <li><strong>It's async by default.</strong> <code>EXPLAIN</code> shows <code>async=[ORDERED, …]</code> on the <code>LookupJoin</code> for both INNER and LEFT; it only goes sync with <code>lookup.async=false</code>.</li>
+    <li><strong>You cannot do this against Kafka.</strong> A processing-time lookup with a Kafka table as the dimension is rejected — <em>"Processing-time temporal join is not supported yet"</em>; the Kafka connector isn't a lookup source. (An event-time <em>versioned</em> join works, but it materializes the dimension into Flink state — back to square one.)</li>
+  </ul>
+  <p>Versus a stream-stream LEFT join for the same enrichment, the lookup join is dramatically cheaper and cleaner:</p>
+  <figure>
+    <img src="img/02_left_vs_lookup_events.png" alt="LEFT join vs lookup join events">
+    <figcaption>Same 3 input rows: the LEFT join emits 9 changelog events (partials + retractions); the lookup join emits 3.</figcaption>
+  </figure>
+  <table>
+    <thead><tr><th></th><th>LEFT stream-stream join</th><th>Lookup join (<code>FOR SYSTEM_TIME AS OF</code>)</th></tr></thead>
+    <tbody>
+      <tr><td>Events for 3 final rows</td><td class="num"><span class="kafka">9</span></td><td class="num"><span class="fluss">3</span></td></tr>
+      <tr><td>Late dimension update</td><td>retracts + re-emits (self-corrects)</td><td>ignored (point-in-time)</td></tr>
+      <tr><td>Flink state</td><td>both sides materialized</td><td>none</td></tr>
+      <tr><td>Sink</td><td>must be upsert/retraction-aware</td><td>append-only is fine</td></tr>
+    </tbody>
+  </table>
+  <p>The tradeoff: the lookup join is <strong>point-in-time</strong> (a miss stays a miss; it won't self-correct when the dimension later updates), whereas the stream-stream LEFT join is eventually correct but pays for it in state + retraction traffic.</p>
+
+  <hr>
+
+  <h3>5. The shared payoff: checkpoints, savepoints, recovery</h3>
+  <p>Both pillars do the same thing — state leaves Flink — so they share the same operational win. I ran the <strong>same 1.5M-key INNER enrichment</strong> three ways and measured what Flink carries:</p>
+  <figure>
+    <img src="img/06_state_100mb_comparison.png" alt="Same 1.5M-key join: 87 MB in Flink vs 48 KB / 12.5 KB with Fluss">
+    <figcaption>Same data, same join — only where the state lives differs. Log scale.</figcaption>
+  </figure>
+  <table>
+    <thead><tr><th>Strategy</th><th>Operator</th><th>Flink checkpoint state</th></tr></thead>
+    <tbody>
+      <tr><td>Stream-stream join (no Fluss)</td><td>stateful <code>Join</code></td><td class="num"><span class="kafka">~87 MB</span></td></tr>
+      <tr><td>Delta join (Fluss)</td><td><code>DeltaJoin</code></td><td class="num"><span class="fluss">~48 KB</span> (~1,800× less)</td></tr>
+      <tr><td>Lookup join (Fluss)</td><td><code>LookupJoin</code></td><td class="num"><span class="fluss">~12.5 KB</span> (~7,000× less)</td></tr>
+    </tbody>
+  </table>
+  <p>Checkpoint size predicts the operational costs that actually hurt — so I triggered a <strong>savepoint</strong> on each and restored from it:</p>
+  <figure>
+    <img src="img/08_savepoint_recovery.png" alt="Savepoint size across the three joins">
+    <figcaption>A savepoint is the full state you ship and reload on every restore/rescale/upgrade. Log scale.</figcaption>
+  </figure>
+  <table>
+    <thead><tr><th>Strategy</th><th>Savepoint size</th><th>Recovery (submit → RUNNING, restored)</th></tr></thead>
+    <tbody>
+      <tr><td>Stream-stream (no Fluss)</td><td class="num"><span class="kafka">242 MB</span></td><td class="num">6.7 s</td></tr>
+      <tr><td>Delta join (Fluss)</td><td class="num"><span class="fluss">28 KB</span></td><td class="num">7.0 s</td></tr>
+      <tr><td>Lookup join (Fluss)</td><td class="num"><span class="fluss">20 KB</span></td><td class="num">6.7 s</td></tr>
+    </tbody>
+  </table>
+  <div class="callout">
+    <b>Honest result on recovery time:</b> at this scale it was ~7 s for all three — 242 MB reloads off <em>local</em> disk fast enough to hide behind fixed job-startup overhead. I verified stream-stream <em>reloaded</em> its full ~82 MB state (didn't rebuild), but I won't claim a recovery-time win I couldn't measure on one node. The <strong>242 MB → 28 KB size ratio</strong> is what predicts the production gap: at multi-GB state, with savepoints on S3, or when rescaling, the stream-stream reload stretches into minutes while delta/lookup stay flat. That's the experiment Part 2 runs on EKS.
+  </div>
+
+  <h4>The cost moves, it doesn't vanish</h4>
+  <p>Pushing state into Fluss isn't free — the work reappears as CPU on the Fluss TabletServer:</p>
+  <figure>
+    <img src="img/07_resources_cpu_mem.png" alt="CPU and memory across the three joins">
+    <figcaption>Flink TM memory falls as state leaves it; Fluss TabletServer CPU rises because it now serves the lookups.</figcaption>
+  </figure>
+  <p>Flink TM memory falls (2,650 → 1,085 MiB) as state leaves it; Fluss TabletServer CPU rises (0.8% → 5.5%). And there's a throughput tradeoff: the stream-stream bulk hash join fills fastest, while delta/lookup are bound by per-row async lookups (~2k rows/s/slot on this single node). <strong>Fluss trades raw join throughput for tiny state and cheap recovery</strong> — decide which your workload cares about.</p>
+
+  <hr>
+
+  <h3>6. The Flink truth: duplicates, retractions, and sinks</h3>
+  <p>A question that comes up immediately: <em>"if I write join output to a Kafka topic, won't I get duplicates?"</em> Yes — and the crucial point is that <strong>this is Flink's changelog semantics, not anything Fluss adds.</strong> It's identical with or without Fluss.</p>
+  <p>I wrote the same 50 rows (10 distinct keys) to three sinks:</p>
+  <figure>
+    <img src="img/03_duplicate_semantics_by_sink.png" alt="Duplicate semantics by sink">
+    <figcaption>Wrote 50 rows / 10 distinct keys to each sink. Only the Fluss PK table dedups at write time.</figcaption>
+  </figure>
+  <p>An append-only Kafka topic kept all <strong>50</strong> (no dedup); an upsert-Kafka topic showed <strong>10</strong> logical rows (folded by key via <code>-U/+U</code> pairs, ~2× the traffic, physical log still 50 until compaction); a Fluss PK table held <strong>10</strong>, deduped at write. So whether you get duplicates depends on the join's changelog mode and the sink:</p>
+  <table>
+    <thead><tr><th>Join</th><th>Output changelog</th><th>Append-only Kafka</th><th>Upsert sink (Fluss PK / upsert-kafka)</th></tr></thead>
+    <tbody>
+      <tr><td>INNER, insert-only sources</td><td><code>[I]</code></td><td class="fluss">OK — 1 record/key</td><td class="fluss">OK — 1 row/key</td></tr>
+      <tr><td>INNER over CDC/updating</td><td><code>[I,UA,D]</code></td><td class="kafka">rejected</td><td>folds by key</td></tr>
+      <tr><td>LEFT / outer</td><td><code>[I,UA,D]</code></td><td class="kafka">rejected</td><td>folds, ~2–3× changelog events</td></tr>
+    </tbody>
+  </table>
+  <p>Proven live: a <code>LEFT JOIN</code> into append-only Kafka is <strong>rejected at planning</strong> (<em>"Table sink doesn't support consuming update and delete changes…"</em>) — whether the sources are Fluss or Kafka. A retracting join forces an upsert sink, full stop. And <strong>consistency</strong>: I ran all three strategies over identical data and they converged to exactly the same rows. (They matched at 1000 each because every row had a match — LEFT only exceeds INNER when there are misses, as the orphan test in §4 showed.)</p>
+
+  <hr class="major">
+  <div class="part">
+    <p class="kicker">Beyond joins</p>
+    <h2>What else Fluss unlocks</h2>
+    <p class="part-sub">Two more things Kafka structurally can&rsquo;t do</p>
+  </div>
+
+  <h3>7. Pillar 3 — Partial updates (Kafka structurally can't)</h3>
+  <p>Fluss PK tables let <strong>different writers update different columns of the same row</strong>, merged server-side. I ran three independent jobs writing disjoint columns of <code>user_id=1</code>:</p>
+  <pre><code>Writer A (user_id, name)      → name=Ada
+Writer B (user_id, tier)      → tier=gold
+Writer C (user_id, last_seen) → last_seen=2026-06-24</code></pre>
+  <p>Result — one complete row, assembled by Fluss, that no single writer ever wrote in full:</p>
+  <pre><code>| user_id | name | tier | last_seen  |
+|       1 | Ada  | gold | 2026-06-24 |</code></pre>
+  <p>This is impossible on a Kafka topic of opaque values — "update one field" means read-modify-write the entire record and republish, with no cross-writer merge. Feature stores, wide-table assembly, CDC column backfill, slowly-changing dimensions all fall out naturally. (Rule: the written columns must include the primary key.)</p>
+
+  <hr>
+
+  <h3>8. Pillar 4 — Columnar reads + open-format tiering</h3>
+  <p>Two more things Kafka's opaque log can't do:</p>
+  <ul>
+    <li><strong>Projection pushdown.</strong> A Flink job needing 3 of 30 columns ships 3 — Fluss prunes server-side (columnar Arrow). I confirmed the pushdown in the plan (<code>project=[c01]</code>); the vendor "10× at 90% pruning" claim I could see the <em>mechanism</em> for but not reproduce the <em>magnitude</em> on a laptop. Kafka ships the whole record and the consumer discards.</li>
+    <li><strong>Lakehouse tiering to Iceberg.</strong> I enabled <code>table.datalake.enabled</code> and watched 500k rows tier to <strong>open Iceberg Parquet</strong> in object storage — then queried them back. Cold data leaves the hot serving path and becomes readable by Flink/Spark/Trino directly, with no broker in the loop. Kafka's log is a closed broker format; tiered-storage helps cost but it isn't an open table.</li>
+  </ul>
+  <div class="callout">
+    Caveat found the hard way: an Iceberg-tiered table must have a <b>single-field primary key</b>, and the <em>streaming</em> union read of a tiered table hit an Arrow bug that crashed the TaskManager — batch reads were fine. Incubating-project edges.
+  </div>
+
+  <hr class="major">
+  <div class="part">
+    <p class="kicker">Decision</p>
+    <h2>The verdict</h2>
+    <p class="part-sub">Where Kafka still wins, and when to reach for Fluss</p>
+  </div>
+
+  <h3>9. Living with Kafka — where Kafka still wins</h3>
+  <p>Most teams won't rip out Kafka, and they shouldn't. Where Kafka beat Fluss in my tests:</p>
+  <figure>
+    <img src="img/04_throughput_and_replay.png" alt="Ingest throughput and bootstrap replay">
+    <figcaption>Two places Kafka still wins on raw speed: ingest throughput and a simple replay-from-zero.</figcaption>
+  </figure>
+  <ul>
+    <li><strong>Raw ingest:</strong> Kafka ~98.6k vs Fluss ~88.7k rec/s (≈11% — Fluss pays Arrow encode + remote tiering on the write path).</li>
+    <li><strong>Simple replay:</strong> reading 500k records from offset 0 was <em>faster on Kafka</em> (1.6 s vs Fluss-tiered 4.2 s) — a sequential broker scan beats the Iceberg catalog+Parquet+Hadoop path at this scale. Fluss's tiering edge is <strong>cost and openness, not replay latency</strong>.</li>
+    <li><strong>Polyglot clients &amp; ecosystem:</strong> Kafka has mature clients everywhere plus Connect, registries, ksqlDB, mirroring, managed offerings. Fluss is Java/Flink-first.</li>
+    <li><strong>The Kafka-protocol bridge isn't ready.</strong> Fluss ships a <code>fluss-kafka</code> listener so Kafka clients could in theory talk to it directly — I enabled it and stock Kafka 3.9 tools <strong>connect but fail on Metadata</strong> (<code>broker id: -1</code>, "topic not present"), so produce/consume/admin all time out. The docs say so: <em>"Kafka protocol compatibility is still in development."</em></li>
+  </ul>
+  <div class="callout" style="border-color:var(--fluss); background:var(--accent-bg)">
+    <b style="color:var(--fluss)">The pragmatic architecture:</b> Kafka stays the ingestion bus; <strong>Fluss becomes the Flink-facing state/serving tier.</strong> Land Kafka topics into Fluss PK tables, then do your joins, lookups, partial updates and analytical reads there — and tier the cold data to Iceberg. You get Fluss's wins exactly where Flink touches the data, without betting your event backbone on an incubating project.
+  </div>
+
+  <hr>
+
+  <h3>10. The verdict — when does Fluss make sense?</h3>
+  <p><strong>Reach for Fluss when</strong> you're Flink-centric and your pain is <strong>large join/enrichment state</strong> (checkpoints, recovery, TM memory) — delta join and lookup join target exactly this; when you want <strong>analytical reads</strong> off your streams (column pruning, tiering); or when you need <strong>partial updates / a lookupable dimension</strong> without an external store.</p>
+  <p><strong>Stay on Kafka (or keep it in front) when</strong> you need a <strong>polyglot event bus</strong>, rely on the <strong>Kafka ecosystem</strong>, do <strong>outer joins</strong> (delta join can't), or can't take on an <strong>incubating</strong> dependency and its ops surface (ZooKeeper — yes, Fluss 0.9.1 still needs it — plus an object store).</p>
+  <blockquote>
+    <p><strong>Verdict:</strong> "Kafka killer" is the wrong frame. Fluss is <strong>the storage layer Flink always wanted</strong> — a complement today, and a credible replacement for Kafka <em>specifically inside Flink pipelines</em> tomorrow.</p>
+  </blockquote>
+
+  <hr>
+
+  <h2>Coming in Part 2: does it hold up at scale on EKS?</h2>
+  <p>Everything above ran on a single laptop node — that proved the <em>mechanics and ratios</em> but forced me to flag four things as <strong>not measurable at this scale</strong>. Part 2 runs the same scenarios on a multi-node <strong>EKS</strong> cluster (Fluss via Helm, the Flink Kubernetes Operator, checkpoints/savepoints on S3):</p>
+  <ol>
+    <li><strong>Recovery-time divergence</strong> — here all three recovered in ~7 s because 242 MB reloads off local disk fast. At multi-GB state with S3 savepoints, stream-stream should stretch into minutes while delta/lookup stay flat.</li>
+    <li><strong>True throughput ceiling</strong> at real parallelism (one TM crashed under uncapped load).</li>
+    <li><strong>Stability</strong> — the tablet dropouts / heartbeat timeouts / Kafka OOM-kills were single-node artifacts; do they survive a real cluster?</li>
+    <li><strong>Cost</strong> — $/throughput and $/GB-tiered, the missing axis for the verdict.</li>
+  </ol>
+  <p>The hook is the one experiment this laptop couldn't run: <em>kill a job carrying tens of GB of join state and time the restore — delta join vs stream-stream — with savepoints on object storage.</em></p>
+
+  <hr>
+
+  <p class="footnote">Repo (Docker Compose, Flink SQL + Java DataStream jobs, all scenarios + raw numbers): <code>&lt;link&gt;</code>. Version facts verified against the Fluss GitHub repo, Maven Central, and the official docs. EKS manifests for Part 2 live in <code>eks/</code>.</p>
+
+</article>
+</body>
+</html>

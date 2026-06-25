@@ -1,0 +1,28 @@
+# E1 driver: the delta-join job as a FlinkSessionJob on the session cluster above.
+# Run the same SQL via a packaged SQL-runner jar, OR use the operator's SQL gateway.
+# This CR shows the delta-join scenario; clone for stream-stream (strategy=NONE) and
+# lookup. The point of E1: run this at multi-GB state, savepoint to S3, kill, restore,
+# time the restore — delta (tiny S3 savepoint) vs stream-stream (multi-GB S3 savepoint).
+apiVersion: flink.apache.org/v1beta1
+kind: FlinkSessionJob
+metadata:
+  name: delta-join
+  namespace: fluss-bench
+spec:
+  deploymentName: fluss-bench
+  job:
+    jarURI: s3://<BUCKET>-artifacts/jobs/fluss-kafka-bench-1.0.0.jar  # or a SQL-runner jar
+    entryClass: io.medium.flussbench.sql.SqlRunner   # wrap sql/90_state_comparison.sql
+    args: ["--strategy", "AUTO", "--sink", "snk_delta"]
+    parallelism: 8
+    upgradeMode: savepoint        # operator takes a savepoint on upgrade/suspend -> E1
+    state: running
+---
+# To run the recovery experiment (E1) operationally:
+#   1. let state build to the target size (1/10/50 GB) — watch checkpoint size in Grafana
+#   2. kubectl patch ... spec.job.state=suspended   # operator triggers a SAVEPOINT to S3
+#   3. record savepoint size (S3) + restore time when resumed:
+#      kubectl patch ... spec.job.state=running       # restores from the S3 savepoint
+#   4. compare across strategy=AUTO (delta) vs NONE (stream-stream) vs lookup
+# The operator records savepoint location + the job's restore is timed via the
+# Flink REST /jobs/<id>/checkpoints 'restored' record (as in Part-1 scripts).

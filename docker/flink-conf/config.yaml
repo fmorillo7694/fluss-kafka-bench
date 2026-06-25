@@ -1,0 +1,65 @@
+blob:
+  server:
+    port: '6124'
+rest:
+  flamegraph:
+    enabled: true
+  address: 0.0.0.0
+jobmanager:
+  execution:
+    failover-strategy: region
+  rpc:
+    address: jobmanager
+    port: 6123
+  bind-host: 0.0.0.0
+  memory:
+    process:
+      size: 1600m
+taskmanager:
+  memory:
+    task:
+      off-heap:
+        size: 3072m
+    framework:
+      off-heap:
+        size: 1024m
+    process:
+      size: 10240m
+  numberOfTaskSlots: 4
+  bind-host: 0.0.0.0
+metrics:
+  reporter:
+    prom:
+      factory:
+        class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+      port: 9249
+query:
+  server:
+    port: '6125'
+execution:
+  checkpointing:
+    savepoint-dir: file:///tmp/flink-savepoints
+    dir: file:///tmp/flink-checkpoints
+    mode: EXACTLY_ONCE
+    interval: 10s
+    timeout: 10min
+    externalized-checkpoint-retention: RETAIN_ON_CANCELLATION
+    min-pause: 5s
+parallelism:
+  default: 2
+env:
+  java:
+    opts:
+      all: --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED -Dio.netty.tryReflectionSetAccessible=true
+state:
+  backend:
+    type: rocksdb
+    rocksdb:
+      metrics:
+        estimate-live-data-size: true
+        total-sst-files-size: true
+        estimate-num-keys: true
+    incremental: true
+web:
+  submit:
+    enable: true

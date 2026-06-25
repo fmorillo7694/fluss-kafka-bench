@@ -1,0 +1,25 @@
+# Scrapes Flink (JobManager + TaskManagers via the Prometheus reporter),
+# plus Kafka and Fluss JMX exporters. Used to compare CPU / memory /
+# checkpoint metrics across the delta-join vs stream-stream-join runs.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: 'flink-jobmanager'
+    static_configs:
+      - targets: ['jobmanager:9249']
+        labels:
+          component: jobmanager
+
+  # TaskManagers expose the Prometheus reporter on 9249; docker DNS round-robins
+  # the 'taskmanager' service name across replicas.
+  - job_name: 'flink-taskmanager'
+    static_configs:
+      - targets: ['taskmanager:9249']
+        labels:
+          component: taskmanager
+
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

@@ -1,0 +1,47 @@
+# Helm values for the Fluss chart on EKS (Part 2).
+# Install:  helm repo add fluss <chart-repo>; helm install fluss fluss/fluss -n fluss-bench -f eks/fluss-values.yaml
+# Replace <BUCKET>; ensure the pods' service account has IRSA S3 access.
+#
+# Mirrors the Part-1 docker-compose config but at cluster scale and on S3.
+
+coordinatorServer:
+  replicas: 1
+  resources:
+    requests: { cpu: "1", memory: "2Gi" }
+    limits:   { cpu: "2", memory: "4Gi" }
+
+tabletServer:
+  replicas: 3                 # scale for capacity; data is bucketed across these
+  resources:
+    requests: { cpu: "2", memory: "4Gi" }
+    limits:   { cpu: "4", memory: "8Gi" }
+  # local hot data + RocksDB on EBS gp3
+  persistence:
+    enabled: true
+    storageClass: gp3
+    size: 100Gi
+
+zookeeper:
+  enabled: true
+  replicas: 3
+
+# Fluss server.yaml properties (rendered into the configmap)
+fluss:
+  properties:
+    # remote tier on S3 (vs MinIO in Part 1)
+    remote.data.dir: s3://<BUCKET>-fluss-remote-data/remote
+    # lakehouse tiering -> Iceberg on S3
+    datalake.enabled: "true"
+    datalake.format: iceberg
+    datalake.iceberg.type: hadoop
+    datalake.iceberg.warehouse: s3://<BUCKET>-iceberg-warehouse/wh
+    # S3 access: prefer IRSA (no static keys). If using keys, set s3.access-key/secret-key.
+    s3.region: us-east-1
+    # standby replicas for fast leader promotion (Part-2 stability test E3)
+    table.kv.standby-replica.enabled: "true"
+
+# NOTE (Part-1 findings to apply here):
+# - The Fluss image ships an iceberg plugin but NOT Hadoop; the hadoop catalog needs
+#   hadoop-client-api/runtime + commons-logging on the server classpath. Either bake a
+#   Fluss image with those jars in /opt/fluss/plugins/iceberg, or mount via initContainer.
+# - Iceberg datalake tables must have a SINGLE-field primary key.

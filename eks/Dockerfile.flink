@@ -1,0 +1,32 @@
+# Baked Flink image for EKS Part 2 — all connector jars + Arrow JVM opts pre-installed,
+# so there are no bind-mounts or entrypoint surgery at scale (the Part-1 pain points).
+#
+# Build & push:
+#   docker build -f eks/Dockerfile.flink -t <ECR_REPO>/fluss-flink:2.2.1-0.9.1 .
+#   docker push <ECR_REPO>/fluss-flink:2.2.1-0.9.1
+ARG FLINK_VERSION=2.2.1
+FROM flink:${FLINK_VERSION}-scala_2.12-java17
+
+ARG FLUSS_VERSION=0.9.1-incubating
+ARG KAFKA_CONN=5.0.0-2.2
+ARG HADOOP_VERSION=3.3.6
+ARG MAVEN=https://repo1.maven.org/maven2
+
+# --- connector + lake + kafka-protocol jars on the Flink classpath ---
+RUN set -eux; \
+    cd /opt/flink/lib; \
+    curl -fsSLO ${MAVEN}/org/apache/fluss/fluss-flink-2.2/${FLUSS_VERSION}/fluss-flink-2.2-${FLUSS_VERSION}.jar; \
+    curl -fsSLO ${MAVEN}/org/apache/fluss/fluss-lake-iceberg/${FLUSS_VERSION}/fluss-lake-iceberg-${FLUSS_VERSION}.jar; \
+    curl -fsSLO ${MAVEN}/org/apache/flink/flink-sql-connector-kafka/${KAFKA_CONN}/flink-sql-connector-kafka-${KAFKA_CONN}.jar; \
+    curl -fsSLO ${MAVEN}/org/apache/hadoop/hadoop-client-api/${HADOOP_VERSION}/hadoop-client-api-${HADOOP_VERSION}.jar; \
+    curl -fsSLO ${MAVEN}/org/apache/hadoop/hadoop-client-runtime/${HADOOP_VERSION}/hadoop-client-runtime-${HADOOP_VERSION}.jar; \
+    curl -fsSLO ${MAVEN}/commons-logging/commons-logging/1.2/commons-logging-1.2.jar
+
+# --- S3 filesystem plugin (for checkpoints/savepoints on S3) ---
+RUN mkdir -p /opt/flink/plugins/s3-fs-hadoop && \
+    cp /opt/flink/opt/flink-s3-fs-hadoop-*.jar /opt/flink/plugins/s3-fs-hadoop/
+
+# --- Arrow JVM opts (Part-1 finding: Fluss MemoryUtil fails on Java 17 without these) ---
+# Appended to config.yaml at build time so every JM/TM/SQL launcher inherits them.
+RUN printf '\nenv:\n  java:\n    opts:\n      all: "--add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED -Dio.netty.tryReflectionSetAccessible=true"\n' \
+    >> /opt/flink/conf/config.yaml

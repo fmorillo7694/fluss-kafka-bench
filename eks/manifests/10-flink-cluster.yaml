@@ -1,0 +1,49 @@
+# Flink session cluster on EKS via the Flink Kubernetes Operator.
+# Checkpoints + savepoints on S3 — this is what makes the recovery experiment (E1)
+# meaningful vs the laptop's local disk. Replace <ECR>, <BUCKET>, <ROLE> placeholders.
+#
+# Prereqs: flink-kubernetes-operator installed (helm), IRSA role with S3 access bound
+# to the 'flink' service account.
+apiVersion: flink.apache.org/v1beta1
+kind: FlinkDeployment
+metadata:
+  name: fluss-bench
+  namespace: fluss-bench
+spec:
+  image: <ECR_REPO>/fluss-flink:2.2.1-0.9.1   # baked image from eks/Dockerfile.flink
+  flinkVersion: v2_2
+  serviceAccount: flink                        # IRSA-bound SA with S3 perms
+  flinkConfiguration:
+    taskmanager.numberOfTaskSlots: "4"
+    # --- state backend + S3 dirs (the Part-2 difference) ---
+    state.backend.type: rocksdb
+    state.backend.incremental: "true"
+    execution.checkpointing.interval: "10s"
+    execution.checkpointing.dir: s3://<BUCKET>-flink-checkpoints/cp
+    execution.checkpointing.savepoint-dir: s3://<BUCKET>-flink-savepoints/sp
+    execution.checkpointing.externalized-checkpoint-retention: RETAIN_ON_CANCELLATION
+    # --- give TMs real direct memory (Part-1 lesson) ---
+    taskmanager.memory.process.size: "8192m"
+    taskmanager.memory.task.off-heap.size: "2048m"
+    taskmanager.memory.framework.off-heap.size: "512m"
+    # --- metrics ---
+    metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+    metrics.reporter.prom.port: "9249"
+    # RocksDB native metrics for the state-size dashboards
+    state.backend.rocksdb.metrics.estimate-live-data-size: "true"
+    state.backend.rocksdb.metrics.total-sst-files-size: "true"
+  jobManager:
+    resource:
+      memory: "2048m"
+      cpu: 1
+  taskManager:
+    replicas: 4                                 # scale this for E2 (throughput at parallelism)
+    resource:
+      memory: "8192m"
+      cpu: 2
+  podTemplate:
+    spec:
+      containers:
+        - name: flink-main-container
+          ports:
+            - { containerPort: 9249, name: metrics }

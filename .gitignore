@@ -1,0 +1,27 @@
+# Build artifacts
+flink-jobs/target/
+*.class
+dependency-reduced-pom.xml
+
+# Connector jars fetched by scripts/fetch-connectors.sh (large, reproducible)
+docker/flink-lib/*.jar
+docker/hadoop-libs/*.jar
+
+# Chart venv
+.chartenv/
+
+# Raw benchmark CSVs (keep curated .md summaries)
+bench/results/*.csv
+
+# Flink/Fluss local state
+checkpoints/
+savepoints/
+rocksdb/
+volumes/
+docker/**/data/
+
+# OS / editor
+.DS_Store
+.idea/
+*.iml
+.vscode/
